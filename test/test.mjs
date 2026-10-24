@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import StringAIPlugin, { extractAllKeys, findKeyForModel, resolveBaseURL } from "../index.mjs"
+import StringAIPlugin from "../index.mjs"
+import { extractAllKeys, findKeyForModel, resolveBaseURL } from "../lib/helpers.mjs"
 
 console.log("=== 开始测试 magpie-string-ai ===")
 
