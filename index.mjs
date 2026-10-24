@@ -43,7 +43,6 @@ export default async function StringAIPlugin({ client } = {}, options = {}) {
             { type: "text", key: "openaiKey", message: "OpenAI / ChatGPT 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
             { type: "text", key: "domesticKey", message: "国产模型 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
             { type: "text", key: "otherKey", message: "其他模型 (Gemini/Grok) 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
-            { type: "text", key: "baseURL", message: "String AI 接入地址 (选填，默认 https://www.string.ink/v1)", placeholder: "https://www.string.ink/v1" },
             { type: "text", key: "name", message: "账号备注名称 (可选)", placeholder: "String AI" },
           ],
         },
