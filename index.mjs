@@ -1,88 +1,107 @@
-// magpie-string-ai: String AI (string.ink) 专用 Magpie 供应商插件
-// 基于 Sub2API 架构深度定制：支持聚合四大分组 API Key（Claude、OpenAI、国产模型、其他模型），
-// 单账号统一管理，按模型智能分发路由，并在用量中心呈现单一整洁卡片与钱包额度。
-
-import {
-  ID,
-  NAME,
-  loadCachedModelKeys,
-  extractAllKeys,
-  resolveBaseURL,
-  aggregateUsage,
-  discoverAllModels,
-  findKeyForModel,
-  memModelKeys,
-} from "./lib/helpers.mjs"
+import { createHash } from "node:crypto"
+import { ID, NAME, extractAllKeys, resolveBaseURL, aggregateUsage, discoverAllModels, money } from "./lib/helpers.mjs"
+import { accountRequest, readAccount, sessionAuth } from "./lib/account.mjs"
+import { browserLogin } from "./lib/login.mjs"
 
 export default async function StringAIPlugin({ client } = {}, options = {}) {
-  await loadCachedModelKeys()
+  const catalogs = new Map()
+  const identity = (auth) => auth.type === "oauth"
+    ? `account:${auth.metadata.userId}`
+    : createHash("sha256").update(JSON.stringify(extractAllKeys(auth, options))).digest("hex")
+
+  async function accountKeys(auth) {
+    if (auth.type === "oauth") return (await readAccount(auth.access)).keys
+    const keys = extractAllKeys(auth, options)
+    if (!keys.length) throw new Error("请登录 String AI")
+    return keys
+  }
+
+  async function catalog(auth, was = {}, reload = false) {
+    const id = identity(auth)
+    if (!reload && catalogs.has(id)) return catalogs.get(id)
+    const keys = await accountKeys(auth)
+    const next = await discoverAllModels(resolveBaseURL(auth, options), keys, was)
+    catalogs.set(id, next)
+    return next
+  }
 
   return {
     auth: {
       provider: ID,
-      async loader(getAuth) {
-        const auth = await getAuth()
-        if (auth?.type !== "api" || !auth.key) return {}
-        const keys = extractAllKeys(auth, options)
-        if (!keys.length) return {}
-        const baseURL = resolveBaseURL(auth, options)
-        if (typeof client?.auth?.set === "function" && auth.accountId !== NAME) {
-          try {
-            await client.auth.set({ path: { id: ID }, body: { ...auth, accountId: NAME } })
-          } catch {}
-        }
-        return { baseURL, apiKey: keys[0].key }
-      },
+      single: true,
       methods: [
+        { type: "oauth", label: "登录 String AI，自动导入全部 API Key", authorize: browserLogin },
         {
           type: "api",
-          label: "String AI API Key (主密钥或默认 Key)",
-          placeholder: "sk-… (输入任一有效 Key 激活账号)",
+          label: "手动填写 API Key",
+          placeholder: "sk-…",
           prompts: [
-            { type: "text", key: "claudeKey", message: "Claude 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
-            { type: "text", key: "openaiKey", message: "OpenAI / ChatGPT 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
-            { type: "text", key: "domesticKey", message: "国产模型 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
-            { type: "text", key: "otherKey", message: "其他模型 (Gemini/Grok) 分组 API Key (选填，留空使用主 Key)", placeholder: "sk-… 留空则跳过" },
-            { type: "text", key: "name", message: "账号备注名称 (可选)", placeholder: "String AI" },
+            { type: "text", key: "claudeKey", message: "Claude 分组 API Key（选填）", placeholder: "sk-…" },
+            { type: "text", key: "openaiKey", message: "OpenAI 分组 API Key（选填）", placeholder: "sk-…" },
+            { type: "text", key: "domesticKey", message: "国产模型 API Key（选填）", placeholder: "sk-…" },
+            { type: "text", key: "otherKey", message: "其他模型 API Key（选填）", placeholder: "sk-…" },
           ],
         },
       ],
+      async refresh(auth) {
+        const session = await accountRequest("/auth/refresh", { body: { refresh_token: auth.refresh } })
+        return sessionAuth(session)
+      },
+      async loader(getAuth) {
+        const auth = await getAuth()
+        if (!auth) return {}
+        if (auth.type === "api" && auth.accountId !== NAME && client?.auth?.set) {
+          await client.auth.set({ path: { id: ID }, body: { ...auth, accountId: NAME } })
+        }
+        const baseURL = resolveBaseURL(auth, options)
+        return {
+          baseURL,
+          apiKey: "string-ai-managed",
+          async fetch(input, init) {
+            const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
+            const base = new URL(baseURL)
+            if (url.origin !== base.origin || !url.pathname.startsWith(`${base.pathname}/`)) {
+              throw new Error("String AI 请求地址超出供应商范围")
+            }
+            const current = await getAuth()
+            const body = JSON.parse(init.body)
+            const { routes } = await catalog(current)
+            const key = routes.get(body.model)
+            if (!key) throw new Error(`String AI 未找到模型 ${body.model} 对应的 API Key，请重新获取模型`)
+            const headers = new Headers(init.headers)
+            headers.set("authorization", `Bearer ${key}`)
+            headers.set("x-api-key", key)
+            headers.delete("x-goog-api-key")
+            return fetch(input, { ...init, headers })
+          },
+        }
+      },
       async usage(getAuth) {
         const auth = await getAuth()
-        const keys = extractAllKeys(auth, options)
-        if (!keys.length) return { error: "未配置 String AI API Key" }
-        const baseURL = resolveBaseURL(auth, options)
-        const res = await aggregateUsage(baseURL, keys)
-        return { user: NAME, ...res }
+        if (!auth) return { error: "请登录 String AI" }
+        try {
+          if (auth.type === "oauth") {
+            const { user, keys } = await readAccount(auth.access)
+            const result = await aggregateUsage(resolveBaseURL(auth, options), keys)
+            if (typeof user.balance !== "number" || !Number.isFinite(user.balance)) throw new Error("String AI 未返回账号余额")
+            return { ...result, user: user.email, balance: money(user.balance) }
+          }
+          return { user: NAME, ...await aggregateUsage(resolveBaseURL(auth, options), await accountKeys(auth)) }
+        } catch (error) {
+          return { error: error.message, ...(error.signIn ? { signIn: error.signIn } : {}) }
+        }
       },
     },
     provider: {
       id: ID,
       async models(provider, { auth } = {}) {
-        const keys = extractAllKeys(auth, options)
-        if (!keys.length) return provider?.models ?? {}
-        const baseURL = resolveBaseURL(auth, options)
-        try {
-          return await discoverAllModels(baseURL, keys, provider?.models)
-        } catch (e) {
-          if (e?.signIn) throw e
-          return provider?.models ?? {}
-        }
+        if (!auth) return provider.models
+        return (await catalog(auth, provider.models, true)).models
       },
-    },
-    "chat.headers": async (params, out) => {
-      const modelId = params?.model?.id
-      if (!modelId) return
-      const keys = extractAllKeys(params?.auth, options)
-      const targetKey = memModelKeys[modelId] || findKeyForModel(modelId, keys.length ? keys : [{ key: params?.provider?.options?.apiKey, category: "primary" }].filter(Boolean))
-      if (targetKey) {
-        out.headers["authorization"] = `Bearer ${targetKey}`
-        out.headers["x-api-key"] = targetKey
-      }
     },
     config(cfg) {
       cfg.provider ??= {}
-      cfg.provider[ID] = { ...(cfg.provider[ID] ?? {}), name: NAME }
+      cfg.provider[ID] = { ...cfg.provider[ID], name: NAME }
     },
   }
 }

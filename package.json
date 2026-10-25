@@ -1,7 +1,7 @@
 {
   "name": "magpie-string-ai",
-  "version": "1.0.0",
-  "description": "String AI (string.ink) 专用 Magpie 供应商插件：聚合多分组 Key、按模型自动路由分发、单卡片展示钱包余额与额度。",
+  "version": "1.1.0",
+  "description": "String AI 专用 Magpie 插件：账号登录后自动读取全部可用 API Key、加载模型并选择对应密钥，单卡片显示余额与额度。",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
