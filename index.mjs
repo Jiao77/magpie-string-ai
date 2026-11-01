@@ -30,7 +30,28 @@ export default async function StringAIPlugin({ client } = {}, options = {}) {
       provider: ID,
       single: true,
       methods: [
-        { type: "oauth", label: "登录 String AI，自动导入全部 API Key", authorize: browserLogin },
+        {
+          type: "oauth",
+          label: "登录 String AI，自动导入全部 API Key",
+          prompts: [
+            {
+              type: "text",
+              key: "callbackURL",
+              message: "远程 Docker 回调网址（本机留空；远程部署填写已反向代理到容器的地址）",
+              placeholder: "http://your-server:4096/string-ai-login",
+              validate: (value) => {
+                if (!String(value ?? "").trim()) return undefined
+                try {
+                  const url = new URL(String(value).trim())
+                  return url.protocol === "http:" || url.protocol === "https:" ? undefined : "回调网址必须使用 http:// 或 https://"
+                } catch {
+                  return "请输入完整回调网址，例如 http://your-server:4096/string-ai-login"
+                }
+              },
+            },
+          ],
+          authorize: browserLogin,
+        },
         {
           type: "api",
           label: "手动填写 API Key",

@@ -147,6 +147,17 @@ try {
     }
   }
 
+  const remote = await browserLogin({ callbackURL: "http://127.0.0.1:0/string-ai-login" })
+  try {
+    const remoteURL = new URL(remote.url)
+    assert.equal(remoteURL.pathname, "/string-ai-login")
+    const remotePage = await (await realFetch(remoteURL.origin + remoteURL.pathname, { headers: { Host: remoteURL.host } })).text()
+    assert.match(remotePage, /String AI/)
+    assert.equal((await realFetch(remoteURL.origin + "/string-ai-login/login", { method: "POST", headers: { Host: remoteURL.host, Origin: remoteURL.origin, "X-Login-State": remoteURL.hash.slice(1), "Content-Type": "application/json" }, body: "{}" })).status, 400)
+  } finally {
+    remote.cancel()
+  }
+
   const legacy = await plugin.auth.loader(async () => ({ type: "api", key: "sk-openai" }))
   assert.equal((await send(legacy, "gpt-example")).usedKey, "Bearer sk-openai")
   console.log("通过：账号登录、两步验证、分页同步、停用和过期过滤、刷新凭据、模型路由、账号隔离、删除同步、余额和原有 API Key 登录。")

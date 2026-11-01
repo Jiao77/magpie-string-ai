@@ -28,7 +28,8 @@
 </main>
 <script>
   const state = location.hash.slice(1)
-  history.replaceState(null, "", "/")
+  const prefix = location.pathname.replace(/\/$/, "")
+  history.replaceState(null, "", location.pathname)
   const form = document.getElementById("form")
   const button = document.getElementById("submit")
   const error = document.getElementById("error")
@@ -41,7 +42,7 @@
     error.textContent = ""
     try {
       const input = requires2FA ? { code: code.value } : { email: document.getElementById("email").value, password: password.value }
-      const response = await fetch("/login", { method: "POST", headers: { "Content-Type": "application/json", "X-Login-State": state }, body: JSON.stringify(input) })
+      const response = await fetch(`${prefix}/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Login-State": state }, body: JSON.stringify(input) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error)
       if (result.requires2FA) {
