@@ -9,9 +9,7 @@ magpie plugin add github:Jiao77/magpie-string-ai
 magpie plugin login string-ai
 ```
 
-选择“登录 String AI，自动导入全部 API Key”。浏览器会打开插件在本机提供的登录页面。输入 String AI 邮箱和密码；账号启用两步验证时，再输入验证码。登录完成后返回 Magpie。
-
-如果 Magpie 页面运行在远程 Docker 中，登录方式会询问“远程 Docker 回调网址”。填写一个已经反向代理到容器 `4096` 端口的地址，例如 `http://your-server:4096/string-ai-login`，并在 Docker 或反向代理中放行这个端口和路径。插件会监听容器的 `0.0.0.0:4096`，浏览器随后访问这个远程地址。不要填写 `127.0.0.1`，除非浏览器和 Magpie 在同一台机器上。
+选择“登录 String AI（远程 Docker 兼容）”。在 Magpie 登录窗口中填写 String AI 邮箱、密码和可选的两步验证码。登录信息由插件直接请求 String AI，成功后自动导入全部 API Key。这个流程不启动浏览器回调页，也不需要填写回调地址，远程 Docker 和本机使用同一套流程。
 
 密码只用于向 `https://www.string.ink` 提交本次登录请求。插件通过 Magpie 保存登录 Token，并自动刷新。API Key 从账号接口读取，不另存模型密钥缓存文件。
 

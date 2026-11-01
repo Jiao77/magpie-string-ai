@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto"
 import { ID, NAME, extractAllKeys, resolveBaseURL, aggregateUsage, discoverAllModels, money } from "./lib/helpers.mjs"
-import { accountRequest, readAccount, sessionAuth } from "./lib/account.mjs"
-import { browserLogin } from "./lib/login.mjs"
+import { accountRequest, loginAccount, readAccount, sessionAuth } from "./lib/account.mjs"
 
 export default async function StringAIPlugin({ client } = {}, options = {}) {
   const catalogs = new Map()
@@ -32,25 +31,26 @@ export default async function StringAIPlugin({ client } = {}, options = {}) {
       methods: [
         {
           type: "oauth",
-          label: "登录 String AI，自动导入全部 API Key",
+          label: "登录 String AI（远程 Docker 兼容）",
           prompts: [
             {
               type: "text",
-              key: "callbackURL",
-              message: "远程 Docker 回调网址（本机留空；远程部署填写已反向代理到容器的地址）",
-              placeholder: "http://your-server:4096/string-ai-login",
+              key: "email",
+              message: "String AI 邮箱",
+              placeholder: "name@example.com",
               validate: (value) => {
-                if (!String(value ?? "").trim()) return undefined
-                try {
-                  const url = new URL(String(value).trim())
-                  return url.protocol === "http:" || url.protocol === "https:" ? undefined : "回调网址必须使用 http:// 或 https://"
-                } catch {
-                  return "请输入完整回调网址，例如 http://your-server:4096/string-ai-login"
-                }
+                return String(value ?? "").trim() ? undefined : "请输入 String AI 邮箱"
               },
             },
+            { type: "password", key: "password", message: "String AI 密码", placeholder: "登录密码" },
+            { type: "text", key: "totpCode", message: "两步验证码（没有则留空）", placeholder: "6 位验证码，可留空" },
           ],
-          authorize: browserLogin,
+          authorize: async (inputs = {}) => ({
+            url: "",
+            instructions: "登录信息会直接发送到 String AI，成功后自动导入全部可用 API Key。",
+            method: "auto",
+            callback: () => loginAccount(inputs),
+          }),
         },
         {
           type: "api",

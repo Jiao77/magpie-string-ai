@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import StringAIPlugin from "../index.mjs"
-import { browserLogin } from "../lib/login.mjs"
-import { readAccount } from "../lib/account.mjs"
+import { loginAccount, readAccount } from "../lib/account.mjs"
 import { SITE } from "../lib/account.mjs"
 
 const realFetch = globalThis.fetch
@@ -13,7 +12,7 @@ let removeClaude = false
 const json = (data) => Response.json({ code: 0, data })
 const activeKey = (id, key, platform) => ({ id, key, status: "active", group_id: id, name: key, group: { name: platform, platform } })
 
-// 上游响应按网页接口契约提供；本地登录页使用真实 HTTP 请求。
+// 上游响应按网页接口契约提供。
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(input)
   if (url.hostname === "127.0.0.1") return realFetch(input, init)
@@ -115,48 +114,26 @@ try {
   await assert.rejects(readAccount(authA.access), /没有可用 API Key/)
   emptyKeys = false
 
-  for (const twoFactor of [false, true]) {
-    require2FA = twoFactor
-    const login = await browserLogin()
-    try {
-      const url = new URL(login.url)
-      const html = await (await realFetch(url.origin)).text()
-      assert.match(html, /type="password"/)
-      const post = (body, state = url.hash.slice(1), origin = url.origin) => realFetch(`${url.origin}/login`, {
-        method: "POST", headers: { "Content-Type": "application/json", "X-Login-State": state, Origin: origin }, body: JSON.stringify(body),
-      })
-      assert.equal((await post({}, "wrong-state")).status, 403)
-      assert.equal((await post({}, url.hash.slice(1), "https://example.com")).status, 403)
-      const response = await post({ email: "user@example.com", password: "test-password" })
-      assert.equal(response.status, 200)
-      const body = await response.json()
-      if (twoFactor) {
-        assert.equal(body.requires2FA, true)
-        assert.equal((await post({ code: "12" })).status, 400)
-        const verified = await post({ code: "123456" })
-        assert.equal((await verified.json()).keyCount, 2)
-      } else assert.equal(body.keyCount, 2)
-      const saved = await login.callback()
-      assert.equal(saved.type, "success")
-      assert.equal(saved.access, "session-a")
-      assert.equal(saved.accountId, "user@example.com")
-      assert.equal(JSON.stringify(saved).includes("test-password"), false)
-      assert.equal(JSON.stringify(saved).includes("sk-"), false)
-    } finally {
-      login.cancel()
-    }
-  }
+  require2FA = false
+  const direct = await loginAccount({ email: "user@example.com", password: "test-password" })
+  assert.equal(direct.type, "success")
+  assert.equal(direct.accountId, "user@example.com")
+  require2FA = true
+  const direct2FA = await loginAccount({ email: "user@example.com", password: "test-password", totpCode: "123456" })
+  assert.equal(direct2FA.type, "success")
+  const missing2FA = await loginAccount({ email: "user@example.com", password: "test-password" })
+  assert.match(missing2FA.error, /两步验证码/)
 
-  const remote = await browserLogin({ callbackURL: "http://127.0.0.1:0/string-ai-login" })
-  try {
-    const remoteURL = new URL(remote.url)
-    assert.equal(remoteURL.pathname, "/string-ai-login")
-    const remotePage = await (await realFetch(remoteURL.origin + remoteURL.pathname, { headers: { Host: remoteURL.host } })).text()
-    assert.match(remotePage, /String AI/)
-    assert.equal((await realFetch(remoteURL.origin + "/string-ai-login/login", { method: "POST", headers: { Host: remoteURL.host, Origin: remoteURL.origin, "X-Login-State": remoteURL.hash.slice(1), "Content-Type": "application/json" }, body: "{}" })).status, 400)
-  } finally {
-    remote.cancel()
-  }
+  require2FA = false
+  const method = plugin.auth.methods[0]
+  const login = await method.authorize({ email: "user@example.com", password: "test-password", totpCode: "" })
+  assert.equal(login.url, "")
+  const saved = await login.callback()
+  assert.equal(saved.type, "success")
+  assert.equal(saved.access, "session-a")
+  assert.equal(saved.accountId, "user@example.com")
+  assert.equal(JSON.stringify(saved).includes("test-password"), false)
+  assert.equal(JSON.stringify(saved).includes("sk-"), false)
 
   const legacy = await plugin.auth.loader(async () => ({ type: "api", key: "sk-openai" }))
   assert.equal((await send(legacy, "gpt-example")).usedKey, "Bearer sk-openai")
