@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { ID, NAME, extractAllKeys, resolveBaseURL, aggregateUsage, discoverAllModels, money } from "./lib/helpers.mjs"
-import { accountRequest, loginAccount, readAccount, sessionAuth } from "./lib/account.mjs"
+import { accountRequest, readAccount, sessionAuth } from "./lib/account.mjs"
+import { browserLogin } from "./lib/login.mjs"
 
 export default async function StringAIPlugin({ client } = {}, options = {}) {
   const catalogs = new Map()
@@ -31,26 +32,8 @@ export default async function StringAIPlugin({ client } = {}, options = {}) {
       methods: [
         {
           type: "oauth",
-          label: "登录 String AI（远程 Docker 兼容）",
-          prompts: [
-            {
-              type: "text",
-              key: "email",
-              message: "String AI 邮箱",
-              placeholder: "name@example.com",
-              validate: (value) => {
-                return String(value ?? "").trim() ? undefined : "请输入 String AI 邮箱"
-              },
-            },
-            { type: "password", key: "password", message: "String AI 密码", placeholder: "登录密码" },
-            { type: "text", key: "totpCode", message: "两步验证码（没有则留空）", placeholder: "6 位验证码，可留空" },
-          ],
-          authorize: async (inputs = {}) => ({
-            url: "",
-            instructions: "登录信息会直接发送到 String AI，成功后自动导入全部可用 API Key。",
-            method: "auto",
-            callback: () => loginAccount(inputs),
-          }),
+          label: "浏览器登录 String AI（支持人机验证和远程 Docker）",
+          authorize: browserLogin,
         },
         {
           type: "api",

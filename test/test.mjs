@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import StringAIPlugin from "../index.mjs"
-import { loginAccount, readAccount } from "../lib/account.mjs"
+import { readAccount } from "../lib/account.mjs"
+import { CLIENT_ID, REDIRECT_URI } from "../lib/login.mjs"
 import { SITE } from "../lib/account.mjs"
 
 const realFetch = globalThis.fetch
 const requests = []
-let require2FA = false
+const pendingLogins = new Map()
+let badAuthURL = false
+let expiredStart = false
 let failKeys = false
 let emptyKeys = false
 let removeClaude = false
@@ -22,13 +26,28 @@ globalThis.fetch = async (input, init = {}) => {
   requests.push({ url, token, body })
   if (url.origin === "https://models.dev") return Response.json({})
   assert.equal(url.origin, SITE)
-  if (url.pathname === "/api/v1/auth/login") {
-    assert.equal(body.password, "test-password")
-    if (require2FA) return json({ requires_2fa: true, temp_token: "temporary" })
-    return json({ access_token: "session-a", refresh_token: "refresh-a", expires_in: 3600 })
+  if (url.pathname === "/api/v1/launcher/auth/start") {
+    assert.equal(body.client_id, CLIENT_ID)
+    assert.equal(body.redirect_uri, REDIRECT_URI)
+    assert.equal(body.code_challenge_method, "S256")
+    assert.match(body.code_challenge, /^[\w-]{43}$/)
+    const state = `las_test_${pendingLogins.size}`
+    pendingLogins.set(state, body)
+    const redirect = `/launcher/auth/authorize?state=${state}`
+    return json({
+      state,
+      auth_url: `${badAuthURL ? "https://example.com" : SITE}/login?${new URLSearchParams({ redirect })}`,
+      expires_at: new Date(Date.now() + (expiredStart ? -1000 : 300000)).toISOString(),
+    })
   }
-  if (url.pathname === "/api/v1/auth/login/2fa") {
-    assert.deepEqual(body, { temp_token: "temporary", totp_code: "123456" })
+  if (url.pathname === "/api/v1/launcher/auth/exchange") {
+    const pending = pendingLogins.get(body.state)
+    assert.ok(pending)
+    assert.equal(body.client_id, CLIENT_ID)
+    assert.equal(body.redirect_uri, pending.redirect_uri)
+    assert.equal(body.device_id, pending.device_id)
+    assert.equal(createHash("sha256").update(body.code_verifier).digest("base64url"), pending.code_challenge)
+    if (body.code !== "lac_valid") return Response.json({ code: 400, message: "授权码无效或已经使用" }, { status: 400 })
     return json({ access_token: "session-a", refresh_token: "refresh-a", expires_in: 3600 })
   }
   if (url.pathname === "/api/v1/auth/refresh") {
@@ -114,30 +133,48 @@ try {
   await assert.rejects(readAccount(authA.access), /没有可用 API Key/)
   emptyKeys = false
 
-  require2FA = false
-  const direct = await loginAccount({ email: "user@example.com", password: "test-password" })
-  assert.equal(direct.type, "success")
-  assert.equal(direct.accountId, "user@example.com")
-  require2FA = true
-  const direct2FA = await loginAccount({ email: "user@example.com", password: "test-password", totpCode: "123456" })
-  assert.equal(direct2FA.type, "success")
-  const missing2FA = await loginAccount({ email: "user@example.com", password: "test-password" })
-  assert.match(missing2FA.error, /两步验证码/)
-
-  require2FA = false
   const method = plugin.auth.methods[0]
-  const login = await method.authorize({ email: "user@example.com", password: "test-password", totpCode: "" })
-  assert.equal(login.url, "")
-  const saved = await login.callback()
+  assert.equal(method.prompts, undefined)
+  const login = await method.authorize()
+  assert.equal(login.method, "code")
+  assert.equal(new URL(login.url).origin, SITE)
+  const state = new URL(new URL(login.url).searchParams.get("redirect"), SITE).searchParams.get("state")
+  const callback = (params) => `${REDIRECT_URI}?${new URLSearchParams({ state, ...params })}`
+  const exchangeCount = () => requests.filter((r) => r.url.pathname === "/api/v1/launcher/auth/exchange").length
+  const before = exchangeCount()
+  await assert.rejects(login.callback("lac_valid"), /完整回调地址/)
+  await assert.rejects(login.callback(callback({ code: "lac_valid" }).replace("127.0.0.1", "example.com")), /回调地址不正确/)
+  await assert.rejects(login.callback(callback({ code: "lac_valid", state: "other-login" })), /不属于本次登录/)
+  await assert.rejects(login.callback(callback({ error: "access_denied" })), /未完成授权/)
+  await assert.rejects(login.callback(callback({})), /缺少授权码/)
+  assert.equal(exchangeCount(), before)
+  const saved = await login.callback(callback({ code: "lac_valid" }))
   assert.equal(saved.type, "success")
   assert.equal(saved.access, "session-a")
   assert.equal(saved.accountId, "user@example.com")
   assert.equal(JSON.stringify(saved).includes("test-password"), false)
   assert.equal(JSON.stringify(saved).includes("sk-"), false)
+  assert.equal(JSON.stringify(saved).includes("code_verifier"), false)
+  const anotherLogin = await method.authorize()
+  assert.notEqual(login.url, anotherLogin.url)
+  await assert.rejects(login.callback(callback({ code: "lac_invalid" })), /授权码无效/)
+  const realNow = Date.now
+  try {
+    Date.now = () => realNow() + 600000
+    await assert.rejects(login.callback(callback({ code: "lac_valid" })), /授权已过期/)
+  } finally {
+    Date.now = realNow
+  }
+  badAuthURL = true
+  await assert.rejects(method.authorize(), /授权链接或有效期不正确/)
+  badAuthURL = false
+  expiredStart = true
+  await assert.rejects(method.authorize(), /授权链接或有效期不正确/)
+  expiredStart = false
 
   const legacy = await plugin.auth.loader(async () => ({ type: "api", key: "sk-openai" }))
   assert.equal((await send(legacy, "gpt-example")).usedKey, "Bearer sk-openai")
-  console.log("通过：账号登录、两步验证、分页同步、停用和过期过滤、刷新凭据、模型路由、账号隔离、删除同步、余额和原有 API Key 登录。")
+  console.log("通过：浏览器 PKCE 登录、回调地址回填、state 校验、授权过期、分页同步、刷新凭据、模型路由、账号隔离、余额和 API Key 登录。")
 } finally {
   globalThis.fetch = realFetch
 }
